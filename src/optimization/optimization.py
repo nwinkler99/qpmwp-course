@@ -101,11 +101,11 @@ class Optimization(ABC):
 
     def __init__(self,
                  params: Optional[OptimizationParameter] = None,
-                 constraints: Constraints = Constraints(),
+                 constraints: Optional[Constraints] = None,
                  **kwargs):
         self.params = OptimizationParameter() if params is None else params
         self.params.update(**kwargs)
-        self.constraints = constraints
+        self.constraints = Constraints() if constraints is None else constraints
         self.objective: Objective = Objective()
         self.results = {}
 
@@ -186,9 +186,13 @@ class Optimization(ABC):
 class LeastSquares(Optimization):
 
     def __init__(self,
+                 constraints: Optional[Constraints] = None,
                  covariance: Optional[Covariance] = None,
                  **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(
+            constraints=constraints,
+            **kwargs
+        )
         self.covariance = covariance
 
     def set_objective(self, optimization_data: OptimizationData) -> None:
@@ -223,7 +227,7 @@ class LeastSquares(Optimization):
 class MeanVariance(Optimization):
 
     def __init__(self,
-                 constraints: Constraints,
+                 constraints: Optional[Constraints] = None,
                  covariance: Optional[Covariance] = None,
                  expected_return: Optional[ExpectedReturn] = None,
                  risk_aversion: float = 1,

@@ -117,7 +117,7 @@ GhAb = constraints.to_GhAb()
 GhAb
 
 
-risk_aversion = 1
+risk_aversion = 3
 
 qp = QuadraticProgram(
     P = covariance.matrix.to_numpy() * risk_aversion,
@@ -128,19 +128,23 @@ qp = QuadraticProgram(
     b = GhAb['b'],
     lb = constraints.box['lower'].to_numpy(),
     ub = constraints.box['upper'].to_numpy(),
-    solver = 'cvxopt'
+    solver = 'cvxopt',
 )
-
 
 qp.problem_data
 
 qp.is_feasible()
 
 qp.solve()
-qp.results.get('solution')
-
 qp.objective_value()
 
+solution = qp.results.get('solution')
+solution
+
+solution.found
+solution.primal_residual()
+solution.dual_residual()
+solution.duality_gap()[0]
 
 
 
@@ -237,6 +241,3 @@ sim['benchmark'] = data['bm_series']
 sim.dropna(how='all', inplace=True)
 
 np.log((1 + sim).cumprod()).plot()
-
-
-

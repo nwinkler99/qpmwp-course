@@ -248,7 +248,7 @@ for risk_aversion in risk_aversion_grid:
     # Extract and store the weights
     weights = {col: float(solution.x[i]) for i, col in enumerate(X.columns)}
     weights_dict[risk_aversion] = pd.Series(weights)
-    
+
 # Convert the dict to a DataFrame
 weights_df = pd.DataFrame(weights_dict).T
 weights_df.index.name = 'risk_aversion'
