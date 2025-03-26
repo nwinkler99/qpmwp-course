@@ -10,6 +10,11 @@
 
 
 
+# Standard library imports
+from typing import Optional
+import pickle
+import os
+
 # Third party imports
 import numpy as np
 import pandas as pd
@@ -18,8 +23,6 @@ import pandas as pd
 from backtesting.portfolio import Portfolio
 from backtesting.strategy import Strategy
 from backtesting.backtest_service import BacktestService
-
-
 
 
 
@@ -76,5 +79,18 @@ class Backtest:
             portfolio = Portfolio(rebalancing_date=rebalancing_date,
                                   weights=weights)
             self.strategy.portfolios.append(portfolio)
+
+        return None
+
+    def save(self,
+             filename: str,
+             path: Optional[str] = None) -> None:
+        try:
+            if path is not None and filename is not None:
+                filename = os.path.join(path, filename)   #// alternatively, use pathlib package
+            with open(filename, "wb") as f:
+                pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as ex:
+            print("Error during pickling object:", ex)
 
         return None

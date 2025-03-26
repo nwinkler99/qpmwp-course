@@ -33,15 +33,6 @@ from backtesting.backtest_item_builder_classes import (
 
 
 
-class BacktestData():
-
-    def __init__(self):
-        pass
-
-
-
-
-
 class BacktestService():
     """
     A class to manage the backtesting process of a trading strategy.
@@ -72,7 +63,7 @@ class BacktestService():
         Builds the optimization for a given rebalancing date.
     """
     def __init__(self,
-                 data: BacktestData,
+                 data: 'BacktestData',
                  optimization_item_builders: dict[str, OptimizationItemBuilder],
                  selection_item_builders: Optional[dict[str, SelectionItemBuilder]] = None,
                  optimization: Optional[Optimization] = None,
