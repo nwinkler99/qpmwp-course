@@ -142,12 +142,13 @@ class Optimization(ABC):
         solution = self.model.results['solution']
         status = solution.found
         ids = self.constraints.ids
-        weights = pd.Series(solution.x[:len(ids)] if status else [None] * len(ids),
-                            index=ids)
+        # weights = pd.Series(solution.x[:len(ids)] if status else [None] * len(ids),
+        #                     index=ids)
+        weights = pd.Series(solution.x[:len(ids)], index=ids)
 
         self.results.update({
             'weights': weights.to_dict(),
-            'status': self.model.results['solution'].found
+            'status': status,
         })
 
         return None
@@ -172,10 +173,21 @@ class Optimization(ABC):
             ub=ub,
             solver_settings=self.params)
 
-        # TODO:
-        # [ ] Add turnover penalty in the objective
-        # [ ] Add turnover constraint
-        # [ ] Add leverage constraint
+        # Deal with turnover constraint or penalty (cannot have both)
+        turnover_penalty = self.params.get('turnover_penalty')
+
+        ## Turnover constraint
+        tocon = self.constraints.l1.get('turnover')
+        if tocon is not None and (turnover_penalty is None or turnover_penalty == 0):
+            x_init = np.array(list(tocon['x0'].values()))
+            self.model.linearize_turnover_constraint(x_init=x_init,
+                                                     to_budget=tocon['rhs'])
+
+        ## Turnover penalty
+        if turnover_penalty is not None and turnover_penalty > 0:
+            x_init = pd.Series(self.params.get('x_init')).to_numpy()
+            self.model.linearize_turnover_objective(x_init=x_init,
+                                                    turnover_penalty=turnover_penalty)
 
         return None
 
@@ -327,3 +339,49 @@ class MinVariance(Optimization):
         else:
             return super().solve()
 
+
+class ScoreVariance(Optimization):
+
+    def __init__(self,
+                 field: str,
+                 constraints: Optional[Constraints] = None,
+                 covariance: Optional[Covariance] = None,
+                 risk_aversion: float = 1,
+                 **kwargs):
+        super().__init__(
+            field=field,
+            constraints=constraints,
+            risk_aversion=risk_aversion,
+            **kwargs,
+        )
+        self.covariance = Covariance() if covariance is None else covariance
+
+    def set_objective(self, optimization_data: OptimizationData) -> None:
+
+        # Arguments
+        risk_aversion = self.params.get('risk_aversion')
+        field = self.params.get('field')
+        if field is None:
+            raise ValueError('Field must be specified.')
+
+        # Extract the scores from the optimization data
+        scores = optimization_data['scores'][field]
+
+        # Create quadratic part of the objective function
+        # If risk aversion is not None and not equal to 0, use covariance matrix
+        if risk_aversion is not None and risk_aversion != 0:
+            P = self.covariance.estimate(
+                X=optimization_data['return_series'],
+                inplace=False
+            ) * 2 * risk_aversion
+        else:
+            P = np.zeros(shape = (len(scores), len(scores)))
+        self.objective = Objective(
+            q = scores * (-1),
+            P = P,
+        )
+
+        return None
+
+    def solve(self) -> None:
+        return super().solve()

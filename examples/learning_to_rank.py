@@ -160,8 +160,8 @@ df_test = merged_df[merged_df['date'] == split_date].reset_index(drop=True)
 X_train = (
     df_train.drop(['date', 'id', 'label', 'ret'], axis=1)
     # df_train.drop(['date', 'id', 'label'], axis=1)
-    .dropna(axis=1, how='all')
-    .dropna(axis=0, how='all')
+#    .dropna(axis=1, how='all')
+#    .dropna(axis=0, how='all')
     .fillna(0)
 )
 y_train = df_train['label'].loc[X_train.index]
@@ -185,17 +185,15 @@ dtest.set_group(grouped_test)
 # --------------------------------------------------------------------------
 
 params = {
-    'objective': 'rank:pairwise',  # Alternative objective for pairwise ranking.
-    # 'objective': 'rank:ndcg',  # Optimize for NDCG (Normalized Discounted Cumulative Gain), suitable for ranking tasks.
-    # 'ndcg_exp_gain': False,  # Disable exponential gain for NDCG calculation, useful for datasets with wide relevance ranges.
+    # 'objective': 'rank:pairwise',  # Alternative objective for pairwise ranking.
+    'objective': 'rank:ndcg',  # Optimize for NDCG (Normalized Discounted Cumulative Gain), suitable for ranking tasks.
+    'ndcg_exp_gain': False,  # Disable exponential gain for NDCG calculation, useful for datasets with wide relevance ranges.
     # 'eval_metric': 'ndcg@5',  # Evaluate NDCG at the top 5 items (commented out).
-    # 'eval_metric': 'ndcg',  # Evaluate NDCG across all items.
-    'boosting_type': 'gbdt',  # Use Gradient Boosting Decision Trees as the boosting method.
+    'eval_metric': 'ndcg',  # Evaluate NDCG across all items.
     'min_child_weight': 1,  # Minimum sum of instance weights (hessian) in a child node to avoid overfitting.
     'max_depth': 6,  # Maximum depth of trees, controls model complexity and risk of overfitting.
     'eta': 0.1,  # Learning rate, controls the contribution of each tree to the model.
     'gamma': 1.0,  # Minimum loss reduction required for a split, higher values make the model more conservative.
-    'n_estimators': 100,  # Number of boosting rounds (trees) to train.
     'lambda': 1,  # L2 regularization term to reduce overfitting.
     'alpha': 0,  # L1 regularization term to reduce overfitting.
 }
@@ -213,7 +211,7 @@ model = xgb.train(params, dtrain, 100)
 preds = model.predict(dtest)
 ranks = pd.Series(preds).rank(method='first', ascending=True).astype(int)
 y_pred = (100 * ranks / len(ranks)).astype(int)  # Normalize the ranks to be between 0 and 100
-
+y_pred
 
 
 # --------------------------------------------------------------------------
@@ -223,7 +221,7 @@ y_pred = (100 * ranks / len(ranks)).astype(int)  # Normalize the ranks to be bet
 # Predictions vs. true (future) labels
 out = pd.concat([
     y_pred,
-    y_test.astype(int), 
+    y_test.astype(int),
     df_test['ret']
 ], axis=1)
 out.index.name = 'id'
@@ -235,7 +233,6 @@ out.plot(kind='scatter', x='y_true', y='ret')
 
 out.sort_values('y_pred', ascending=False).head(10)
 out.sort_values('y_true', ascending=False).head(10)
-
 
 
 # Calculate the NDCG score
