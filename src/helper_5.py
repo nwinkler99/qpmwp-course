@@ -6,6 +6,16 @@ import copy
 from optimization.optimization import Optimization, Constraints, Covariance, ExpectedReturn, Objective, OptimizationData
 from estimation.black_litterman import generate_views_from_scores, bl_posterior_mean
 from abc import ABC, abstractmethod 
+from helper_functions import to_numpy
+from estimation.covariance import Covariance
+from estimation.expected_return import ExpectedReturn
+from estimation.black_litterman import (
+    bl_posterior_mean,
+    generate_views_from_scores,
+)
+from optimization.optimization_data import OptimizationData
+from optimization.constraints import Constraints
+from optimization.quadratic_program import QuadraticProgram
 
 class Objective():
 
