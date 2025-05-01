@@ -3,7 +3,7 @@ from scipy.optimize import minimize_scalar
 import numpy as np
 import pandas as pd
 import copy
-from optimization import Optimization, Constraints, Covariance, ExpectedReturn, Objective, OptimizationData
+from optimization.optimization import Optimization, Constraints, Covariance, ExpectedReturn, Objective, OptimizationData
 from estimation.black_litterman import generate_views_from_scores, bl_posterior_mean
 
 
