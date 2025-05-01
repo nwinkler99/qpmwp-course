@@ -139,6 +139,33 @@ class Covariance:
 # --------------------------------------------------------------------------
 # Functions
 # --------------------------------------------------------------------------
+from sklearn.impute import SimpleImputer
+
+
+def _impute(X, strategy='mean'):
+    """Return numpy array with NaNs imputed by column mean/median."""
+    imputer = SimpleImputer(strategy=strategy)               # :contentReference[oaicite:0]{index=0}
+    return imputer.fit_transform(X)
+
+def cov_ledoit(X, strategy='mean'):
+    arr = X.values if isinstance(X, pd.DataFrame) else X
+    arr_filled = _impute(arr, strategy=strategy)
+    lw = LedoitWolf()
+    lw.fit(arr_filled)
+    cov = lw.covariance_
+    if isinstance(X, pd.DataFrame):
+        return pd.DataFrame(cov, index=X.columns, columns=X.columns)
+    return cov
+
+def cov_mcd(X, strategy='mean'):
+    arr = X.values if isinstance(X, pd.DataFrame) else X
+    arr_filled = _impute(arr, strategy=strategy)
+    mcd = MinCovDet()
+    mcd.fit(arr_filled)
+    cov = mcd.covariance_
+    if isinstance(X, pd.DataFrame):
+        return pd.DataFrame(cov, index=X.columns, columns=X.columns)
+    return cov
 
 def cov_pearson(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.ndarray]:
     if isinstance(X, pd.DataFrame):
@@ -146,33 +173,6 @@ def cov_pearson(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.n
     else:
         covmat = np.cov(X, rowvar=False)
     return covmat
-
-def cov_ledoit(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.ndarray]:
-    if isinstance(X, pd.DataFrame):
-        arr = X.values
-        lw = LedoitWolf()
-        lw.fit(arr)
-        covmat = lw.covariance_
-        # gib DataFrame mit originalen Spalten/Index zurück
-        return pd.DataFrame(covmat, index=X.columns, columns=X.columns)
-    else:
-        # ndarray-Fall
-        lw = LedoitWolf()
-        lw.fit(X)
-        return lw.covariance_
-
-def cov_mcd(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.ndarray]:
-    if isinstance(X, pd.DataFrame):
-        arr = X.values
-        mcd = MinCovDet()
-        mcd.fit(arr)
-        covmat = mcd.covariance_
-        return pd.DataFrame(covmat, index=X.columns, columns=X.columns)
-    # ndarray-Fall: direkt schätzen
-    else:
-        mcd = MinCovDet()
-        mcd.fit(X)
-        return mcd.covariance_
 
 
 def is_pos_def(B):
