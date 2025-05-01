@@ -74,7 +74,7 @@ class MaxSharpe(Optimization):
         return None
     
 
-class BlackLitterman(Optimization):
+class BlackLittermanMS(Optimization):
 
     def __init__(self,
                  fields: list[str],
