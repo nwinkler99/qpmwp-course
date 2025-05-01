@@ -13,10 +13,20 @@
 # Standard library imports
 from abc import ABC, abstractmethod
 from typing import Optional
+import copy
+
+import os
+import sys
 
 # Third party imports
 import numpy as np
 import pandas as pd
+
+# Add the project root directory to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+src_path = os.path.join(project_root, 'src')
+sys.path.append(project_root)
+sys.path.append(src_path)
 
 # Local modules
 from helper_functions import to_numpy
@@ -659,6 +669,9 @@ class BlackLittermanMS(Optimization):
             Psi=Psi,
             Omega=Omega,
         )
+        
+        self.mu = copy.deepcopy(mu_posterior)
+        self.cov = copy.deepcopy(self.covariance.matrix)
 
         self.objective = Objective(
             q = mu_posterior * (-1),
