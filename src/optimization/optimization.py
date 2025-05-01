@@ -353,6 +353,8 @@ class BlackLitterman(Optimization):
         self.objective = Objective(
             q = mu_posterior * (-1),
             P = self.covariance.matrix * risk_aversion * 2,
+            mu_implied = mu_implied,
+            mu_posterior = mu_posterior,
         )
         return None
 
@@ -487,6 +489,7 @@ class ScoreVariance(Optimization):
         self.objective = Objective(
             q = scores * (-1),
             P = P,
+
         )
 
         return None
