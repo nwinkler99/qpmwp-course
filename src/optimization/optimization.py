@@ -496,3 +496,209 @@ class ScoreVariance(Optimization):
 
     def solve(self) -> None:
         return super().solve()
+
+
+class MaxSharpe(Optimization):
+
+    def __init__(self,
+                 constraints: Optional[Constraints] = None,
+                 covariance: Optional[Covariance] = None,
+                 expected_return: Optional[ExpectedReturn] = None,
+                 turnover_penalty: Optional[float] = None,
+                 risk_aversion: float = 1.0,
+                 iterations: int = 10, 
+                 **kwargs) -> None:
+        super().__init__(
+            constraints=constraints,
+            **kwargs,
+        )
+        self.covariance = Covariance() if covariance is None else covariance
+        self.expected_return = ExpectedReturn() if expected_return is None else expected_return
+        self.params['turnover_penalty'] = turnover_penalty
+        self.params['risk_aversion'] = risk_aversion
+        self.iterations = iterations
+
+    def set_objective(self, optimization_data: OptimizationData) -> None:
+        self.data = optimization_data
+        X = optimization_data['return_series']
+        self.cov = self.covariance.estimate(X=X, inplace=False)
+        self.mu  = self.expected_return.estimate(X=X, inplace=False)
+        self.objective = Objective(
+            q = -1.0 * self.mu,
+            P = 2.0 * self.cov,
+        )
+        self.base_P = copy.deepcopy(2.0 * self.cov)
+
+    def solve(self) -> None:
+        parent_solve = super(MaxSharpe, self).solve
+
+        def _neg_sharpe(lam: float) -> float:
+            # scale P and re-solve
+            self.params['risk_aversion'] = lam
+            self.objective.coefficients["P"] = self.base_P * lam
+            parent_solve()
+            w = np.array(list(self.results["weights"].values()))
+            sr = (self.mu @ w) / np.sqrt(w @ self.cov @ w)
+            return -sr
+
+        # one-line search over [1e-2,1e2]
+        res = minimize_scalar(
+            _neg_sharpe,
+            bounds=(1e-2, 1e2),
+            method="bounded",
+            options={"maxiter": self.iterations, "xatol": 1e-3}
+        )
+
+        # unpack results
+        best_lambda = res.x
+        best_sharpe = -res.fun
+        # re-solve once at the optimum to populate weights
+        self.objective.P = self.base_P * best_lambda
+        parent_solve()
+
+        self.results = {
+            "weights":       self.results["weights"],
+            "best_sharpe":   best_sharpe,
+            "risk_aversion": best_lambda,
+            "status":        True,
+        }
+        return None
+    
+
+class BlackLittermanMS(Optimization):
+
+    def __init__(self,
+                 fields: list[str],
+                 covariance: Optional[Covariance] = None,
+                 risk_aversion: float = 1,
+                 tau_psi: float = 1,
+                 tau_omega: float = 1,
+                 view_method: str = 'absolute',
+                 scalefactor: int = 1,
+                 iterations: int = 5,
+                 **kwargs) -> None:
+        super().__init__(
+            fields=fields,
+            risk_aversion=risk_aversion,
+            tau_psi=tau_psi,
+            tau_omega=tau_omega,
+            view_method=view_method,
+            scalefactor=scalefactor,
+            **kwargs
+        )
+        self.covariance = Covariance() if covariance is None else covariance
+        self.iterations = iterations
+    def set_objective(self, optimization_data: OptimizationData) -> None:
+        '''
+        Sets the objective function for the optimization problem.
+        
+        Parameters:
+        training_data: Training data which must contain 
+            return series (to compute the covariances) and scores.
+        '''
+        self.data = optimization_data
+        # Retrieve configuration parameters from the params attribute
+        fields = self.params.get('fields')
+        risk_aversion = self.params.get('risk_aversion')
+        tau_psi = self.params.get('tau_psi')
+        tau_omega = self.params.get('tau_omega')
+        view_method = self.params.get('view_method')
+        scalefactor = self.params.get('scalefactor')
+
+        # Calculate the covariance matrix
+        self.covariance.estimate(
+            X=optimization_data['return_series'],
+            inplace=True,
+        )
+
+        # Extract benchmark weights
+        cap_weights = optimization_data['cap_weights']
+
+        # # Alternatively, calculate minimum tracking error portfolio
+        # optim = LeastSquares(
+        #     constraints = self.constraints,
+        #     solver_name = self.params.get('solver_name'),
+        # )
+        # optim.set_objective(optimization_data=optimization_data)
+        # optim.solve()
+        # cap_weights = pd.Series(optim.results['weights'])
+
+        # Implied expected return of benchmark
+        mu_implied = risk_aversion * self.covariance.matrix @ cap_weights
+
+        # Extract scores
+        scores = optimization_data['scores'][fields]
+
+        # Construct the views
+        P_tmp = {}
+        q_tmp = {}
+        for col in scores.columns:
+            P_tmp[col], q_tmp[col] = generate_views_from_scores(
+                scores=scores[col],
+                mu_implied=mu_implied,
+                method=view_method,
+                scalefactor=scalefactor,
+            )
+
+        P = pd.concat(P_tmp, axis=0)
+        q = pd.concat(q_tmp, axis=0)
+
+        # Define the uncertainty of the views
+        Omega = pd.DataFrame(
+            np.diag([tau_omega] * len(q)),
+            index=q.index,
+            columns=q.index
+        )
+        Psi = self.covariance.matrix * tau_psi
+
+        # Compute the posterior expected return vector
+        mu_posterior = bl_posterior_mean(
+            mu_prior=mu_implied,
+            P=P,
+            q=q,
+            Psi=Psi,
+            Omega=Omega,
+        )
+
+        self.objective = Objective(
+            q = mu_posterior * (-1),
+            P = self.covariance.matrix * risk_aversion * 2,
+            mu_implied = mu_implied,
+            mu_posterior = mu_posterior,
+        )
+
+
+    def solve(self) -> None:
+        parent_solve = super(BlackLittermanMS, self).solve
+
+        def _neg_sharpe(lam: float) -> float:
+            # scale P and re-solve
+            self.params['risk_aversion'] = lam
+            self.set_objective(optimization_data=self.data)
+            parent_solve()
+            w = np.array(list(self.results["weights"].values()))
+            sr = (self.mu @ w) / np.sqrt(w @ self.cov @ w)
+            return -sr
+
+        # one-line search over [1e-2,1e2]
+        res = minimize_scalar(
+            _neg_sharpe,
+            bounds=(1e-2, 1e2),
+            method="bounded",
+            options={"maxiter": self.iterations, "xatol": 1e-3}
+        )
+
+        # unpack results
+        best_lambda = res.x
+        best_sharpe = -res.fun
+        # re-solve once at the optimum to populate weights
+        self.objective.P = self.base_P * best_lambda
+        parent_solve()
+
+        self.results = {
+            "weights":       self.results["weights"],
+            "best_sharpe":   best_sharpe,
+            "risk_aversion": best_lambda,
+            "status":        True,
+        }
+        return None
