@@ -564,7 +564,7 @@ class MaxSharpe(Optimization):
         }
         return None
     
-
+from scipy.optimize import minimize_scalar
 class BlackLittermanMS(Optimization):
 
     def __init__(self,
