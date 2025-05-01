@@ -17,7 +17,7 @@ from typing import Union, Optional
 import numpy as np
 import pandas as pd
 
-
+from sklearn.covariance import LedoitWolf, MinCovDet
 
 # TODO:
 
@@ -106,9 +106,16 @@ class Covariance:
     ) -> Union[pd.DataFrame, np.ndarray, None]:
 
         estimation_method = self.spec['method']
-
+        print(f'Covariance estimation method: {estimation_method}')
         if estimation_method == 'pearson':
             cov_matrix = cov_pearson(X=X)
+
+        elif estimation_method == 'ledoit':
+            cov_matrix = cov_ledoit(X=X)  # Placeholder for ledait_shrinkage
+
+        elif estimation_method == 'mcd':
+            cov_matrix = cov_mcd(X=X)  # Placeholder for ledait_shrinkage
+
         else:
             raise ValueError(
                 'Estimation method not recognized.'
@@ -140,6 +147,32 @@ def cov_pearson(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.n
         covmat = np.cov(X, rowvar=False)
     return covmat
 
+def cov_ledoit(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.ndarray]:
+    if isinstance(X, pd.DataFrame):
+        arr = X.values
+        lw = LedoitWolf()
+        lw.fit(arr)
+        covmat = lw.covariance_
+        # gib DataFrame mit originalen Spalten/Index zurück
+        return pd.DataFrame(covmat, index=X.columns, columns=X.columns)
+    else:
+        # ndarray-Fall
+        lw = LedoitWolf()
+        lw.fit(X)
+        return lw.covariance_
+
+def cov_mcd(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.ndarray]:
+    if isinstance(X, pd.DataFrame):
+        arr = X.values
+        mcd = MinCovDet()
+        mcd.fit(arr)
+        covmat = mcd.covariance_
+        return pd.DataFrame(covmat, index=X.columns, columns=X.columns)
+    # ndarray-Fall: direkt schätzen
+    else:
+        mcd = MinCovDet()
+        mcd.fit(X)
+        return mcd.covariance_
 
 
 def is_pos_def(B):
