@@ -353,7 +353,7 @@ class BlackLittermanMS(Optimization):
 
 
     def solve(self) -> None:
-        parent_solve = super(MaxSharpe, self).solve
+        parent_solve = super(BlackLittermanMS, self).solve
 
         def _neg_sharpe(lam: float) -> float:
             # scale P and re-solve
