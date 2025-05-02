@@ -565,7 +565,7 @@ class MaxSharpe(Optimization):
         # re-solve once at the optimum to populate weights
         self.objective.P = self.base_P * best_lambda
         parent_solve()
-
+        print('best_lambda:', best_lambda)
         self.results = {
             "weights":       self.results["weights"],
             "best_sharpe":   best_sharpe,
@@ -705,9 +705,10 @@ class BlackLittermanMS(Optimization):
         best_lambda = res.x
         best_sharpe = -res.fun
         # re-solve once at the optimum to populate weights
-        self.objective.P = self.base_P * best_lambda
+        self.params['risk_aversion'] = best_lambda
+        self.set_objective(optimization_data=self.data)
         parent_solve()
-
+        print('best_lambda:', best_lambda)
         self.results = {
             "weights":       self.results["weights"],
             "best_sharpe":   best_sharpe,

@@ -222,10 +222,164 @@ def bibfn_selection_jkp_factor_scores(bs, rebdate: str, **kwargs) -> pd.DataFram
 
 
 
+def bibfn_scores_ltr(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
+
+    '''
+    Constructs scores based on a Learning-to-Rank model.        
+    '''
+
+    # Arguments
+    params_xgb = kwargs.get('params_xgb')
+    if params_xgb is None or not isinstance(params_xgb, dict):
+        raise ValueError('params_xgb is not defined or not a dictionary.')
+    training_dates = kwargs.get('training_dates')
+
+    # Extract data
+    df_train = bs.data.merged_df[bs.data.merged_df['date'] < rebdate]
+    df_test = bs.data.merged_df[bs.data.merged_df['date'] == rebdate]
+    df_test = df_test.loc[df_test['id'].drop_duplicates(keep='first').index]
+    df_test = df_test.loc[df_test['id'].isin(bs.selection.selected)]
+
+    # Training data
+    X_train = (
+        df_train.drop(['date', 'id', 'label', 'ret'], axis=1)
+        # df_train.drop(['date', 'id', 'label'], axis=1)  # Include ret in the features as a proof of concept
+    )
+    y_train = df_train['label'].loc[X_train.index]
+    grouped_train = df_train.groupby('date').size().to_numpy()
+    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtrain.set_group(grouped_train)
+
+    # Test data
+    y_test = pd.Series(df_test['label'].values, index=df_test['id'])
+    X_test = df_test.drop(['date', 'id', 'label', 'ret'], axis=1)
+    # X_test = df_test.drop(['date', 'id', 'label'], axis=1)  # Include ret in the features as a proof of concept
+    grouped_test = df_test.groupby('date').size().to_numpy()
+    dtest = xgb.DMatrix(X_test)
+    dtest.set_group(grouped_test)
+
+    # Train the model using the training data
+    if rebdate in training_dates:
+        model = xgb.train(params_xgb, dtrain, 100)
+        bs.model_ltr = model
+    else:
+        # Use the previous model for the current rebalancing date
+        model = bs.model_ltr
+
+    # Predict using the test data
+    pred = model.predict(dtest)
+    preds =  pd.Series(pred, df_test['id'], dtype='float64')
+    ranks = preds.rank(method='first', ascending=True).astype(int)
+
+    # Output
+    scores = pd.concat({
+        'scores': preds,
+        'ranks': (100 * ranks / len(ranks)).astype(int),  # Normalize the ranks to be between 0 and 100
+        'true': y_test,
+        'ret': pd.Series(df_test['ret'].values, index=df_test['id']),
+    }, axis=1)
+    bs.optimization_data['scores'] = scores
+    return None
+
+def bibfn_filter_jkp_factor_scores(
+    bs,
+    rebdate: str,
+    bounds: dict = None,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Filters JKP factor scores for each ID based on a rebalance date, keeps the last available
+    score within one year prior to rebdate, and applies custom lower/upper bounds per specified factor.
+
+    Args:
+        bs: Backtest or data structure with .data.jkp_data (a DataFrame with MultiIndex [id, date]).
+        rebdate: Rebalance date as string or datetime-like.
+        bounds: Dict mapping factor names to [lower_bound, upper_bound].
+                Bounds can be raw values or percentiles (0-1). Only factors in this dict are filtered.
+                If None or empty, no filtering is applied.
+
+    Returns:
+        DataFrame of filtered scores with an additional 'binary' column indicating non-missing rows.
+    """
+    # Ensure rebdate is a Timestamp
+    reb_dt = pd.to_datetime(rebdate)
+
+    # Load JKP data
+    df = bs.data.jkp_data
+
+    # Determine IDs to include
+    ids = df.index.get_level_values('id').unique()
+
+    # Filter to one-year window and desired IDs
+    date_idx = df.index.get_level_values('date')
+    id_idx = df.index.get_level_values('id')
+    mask = (
+        (date_idx < reb_dt) &
+        (date_idx >= reb_dt - pd.Timedelta(days=365)) &
+        (id_idx.isin(ids))
+    )
+    df_window = df.loc[mask]
+
+    # Last observation per id
+    scores = df_window.groupby('id').last()
+
+    # Debug: log shapes
+    # print(f"df_window shape: {df_window.shape}, scores shape: {scores.shape}")
+
+    # If no bounds provided, skip filtering extremes
+    if not bounds:
+        scores['binary'] = scores.notna().all(axis=1).astype(int)
+        return scores
+
+    # Build keep mask (start all True)
+    keep = pd.Series(True, index=scores.index)
+
+    # Apply bounds per specified factor only
+    for factor, (low, high) in bounds.items():
+        if factor not in scores.columns:
+            raise KeyError(f"Factor '{factor}' not found in scores columns")
+        series = scores[factor]
+        # Lower bound
+        if low is None:
+            low_cut = -np.inf
+        elif 0 <= low <= 1:
+            low_cut = series.quantile(low)
+        else:
+            low_cut = low
+        # Upper bound
+        if high is None:
+            high_cut = np.inf
+        elif 0 <= high <= 1:
+            high_cut = series.quantile(high)
+        else:
+            high_cut = high
+        # Combine
+        keep &= series.between(low_cut, high_cut)
+
+    print("Schnittmenge aller Filter:", keep.sum())
+    # Filtered scores and binary indicator
+    filtered = scores.loc[keep].copy()
+    filtered['binary'] = filtered.notna().all(axis=1).astype(int)
+    return filtered
+
+
+
 
 # --------------------------------------------------------------------------
 # Backtest item builder functions (bibfn) - Optimization data
 # --------------------------------------------------------------------------
+
+def bibfn_scores(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
+
+    '''
+    Copies scores from the selection object to the optimization data object
+    '''
+
+    ids = bs.selection.selected
+    scores = bs.selection.filtered['scores'].loc[ids]
+    # Drop the 'binary' column
+    bs.optimization_data['scores'] = scores.drop(columns=['binary'])
+    return None
 
 def bibfn_return_series(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
 
@@ -328,79 +482,26 @@ def bibfn_cap_weights(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
 
     return None
 
+def bibfn_equal_weights(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
 
-def bibfn_scores(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
-
-    '''
-    Copies scores from the selection object to the optimization data object
-    '''
-
+    # Selection
     ids = bs.selection.selected
-    scores = bs.selection.filtered['scores'].loc[ids]
-    # Drop the 'binary' column
-    bs.optimization_data['scores'] = scores.drop(columns=['binary'])
+
+    # Data - market capitalization
+    mcap = bs.data.market_data['mktcap']
+
+    # Get last available values for current rebdate
+    mcap = mcap[mcap.index.get_level_values('date') <= rebdate].groupby(
+        level = 'id'
+    ).last()
+
+    # Remove duplicates
+    mcap = mcap[~mcap.index.duplicated(keep=False)].loc[ids]
+    
+    # Attach cap-weights to the optimization data object
+    bs.optimization_data['cap_weights'] = (0*mcap+1)/ len(mcap)
+
     return None
-
-
-def bibfn_scores_ltr(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
-
-    '''
-    Constructs scores based on a Learning-to-Rank model.        
-    '''
-
-    # Arguments
-    params_xgb = kwargs.get('params_xgb')
-    if params_xgb is None or not isinstance(params_xgb, dict):
-        raise ValueError('params_xgb is not defined or not a dictionary.')
-    training_dates = kwargs.get('training_dates')
-
-    # Extract data
-    df_train = bs.data.merged_df[bs.data.merged_df['date'] < rebdate]
-    df_test = bs.data.merged_df[bs.data.merged_df['date'] == rebdate]
-    df_test = df_test.loc[df_test['id'].drop_duplicates(keep='first').index]
-    df_test = df_test.loc[df_test['id'].isin(bs.selection.selected)]
-
-    # Training data
-    X_train = (
-        df_train.drop(['date', 'id', 'label', 'ret'], axis=1)
-        # df_train.drop(['date', 'id', 'label'], axis=1)  # Include ret in the features as a proof of concept
-    )
-    y_train = df_train['label'].loc[X_train.index]
-    grouped_train = df_train.groupby('date').size().to_numpy()
-    dtrain = xgb.DMatrix(X_train, label=y_train)
-    dtrain.set_group(grouped_train)
-
-    # Test data
-    y_test = pd.Series(df_test['label'].values, index=df_test['id'])
-    X_test = df_test.drop(['date', 'id', 'label', 'ret'], axis=1)
-    # X_test = df_test.drop(['date', 'id', 'label'], axis=1)  # Include ret in the features as a proof of concept
-    grouped_test = df_test.groupby('date').size().to_numpy()
-    dtest = xgb.DMatrix(X_test)
-    dtest.set_group(grouped_test)
-
-    # Train the model using the training data
-    if rebdate in training_dates:
-        model = xgb.train(params_xgb, dtrain, 100)
-        bs.model_ltr = model
-    else:
-        # Use the previous model for the current rebalancing date
-        model = bs.model_ltr
-
-    # Predict using the test data
-    pred = model.predict(dtest)
-    preds =  pd.Series(pred, df_test['id'], dtype='float64')
-    ranks = preds.rank(method='first', ascending=True).astype(int)
-
-    # Output
-    scores = pd.concat({
-        'scores': preds,
-        'ranks': (100 * ranks / len(ranks)).astype(int),  # Normalize the ranks to be between 0 and 100
-        'true': y_test,
-        'ret': pd.Series(df_test['ret'].values, index=df_test['id']),
-    }, axis=1)
-    bs.optimization_data['scores'] = scores
-    return None
-
 
 
 
@@ -439,6 +540,64 @@ def bibfn_box_constraints(bs: 'BacktestService', rebdate: str, **kwargs) -> None
                                         lower = lower,
                                         upper = upper)
     return None
+
+def bibfn_sector_exposure_constraints(
+    bs: 'BacktestService',
+    rebdate: str,
+    limits: dict = None,
+    sector_field: str = 'sector', **kwargs
+) -> None:
+    """
+    Backtest item builder that adds linear constraints on sector weights:
+    sum of weights for each sector <= specified limit.
+
+    Args:
+        bs: BacktestService
+        rebdate: rebalance date
+        limits: dict mapping sector name to maximum weight (e.g. {'Tech':0.2, 'Health':0.15});
+                if None, uses kwargs defaults or a uniform limit of 0.2
+        sector_field: name of sector column in bs.data.market_data
+    """
+    # Load sector data
+    sd = bs.data.market_data[sector_field]
+    # get last available sector per id up to rebalance date
+    sd = sd[sd.index.get_level_values('date') <= rebdate]
+    last_sector = sd.groupby(level='id').last()
+
+    # Determine unique sectors
+    sectors = last_sector.unique()
+
+    # Default uniform limit if none provided
+    if limits is None:
+        # uniform 20% per sector
+        limits = {s: 0.2 for s in sectors}
+
+    # Build G matrix: one row per sector
+    ids = bs.optimization.constraints.ids
+    # Initialize DataFrame for G and RHS
+    G_rows = []
+    sense = []
+    rhs = []
+    names = []
+    for sector, lim in limits.items():
+        # indicator 1 for ids in this sector, else 0
+        mask = (last_sector.reindex(ids).fillna('') == sector).astype(int)
+        # skip if no ids in this sector
+        if mask.sum() == 0:
+            continue
+        G_rows.append(mask.values)
+        sense.append('<=')
+        rhs.append(lim)
+        names.append(f"sect_{sector}")
+
+    # create DataFrame G with index names and columns ids
+    G = pd.DataFrame(G_rows, index=names, columns=ids)
+    rhs = pd.Series(rhs, index=names)
+    # Add linear constraints
+    bs.optimization.constraints.add_linear(G=G, sense=sense, rhs=rhs)
+    return None
+
+
 
 
 def bibfn_size_dependent_upper_bounds(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
@@ -508,3 +667,7 @@ def bibfn_turnover_constraint(bs, rebdate: str, **kwargs) -> None:
         )
 
     return None
+
+
+
+

@@ -67,6 +67,7 @@ class Covariance:
     def __init__(self,
                  spec: Optional[CovarianceSpecification] = None,
                  **kwargs):
+        # allow passing span for EWMA via kwargs
         self.spec = CovarianceSpecification() if spec is None else spec
         self.spec.update(kwargs)
         self._matrix: Union[pd.DataFrame, np.ndarray, None] = None
@@ -106,15 +107,25 @@ class Covariance:
     ) -> Union[pd.DataFrame, np.ndarray, None]:
 
         estimation_method = self.spec['method']
+        # retrieve span if set, else default
+        span = self.spec.get('span', 252)
+        bandwidth = self.spec.get('bandwidth', None)
         print(f'Covariance estimation method: {estimation_method}')
+
         if estimation_method == 'pearson':
             cov_matrix = cov_pearson(X=X)
 
         elif estimation_method == 'ledoit':
-            cov_matrix = cov_ledoit(X=X)  # Placeholder for ledait_shrinkage
+            cov_matrix = cov_ledoit(X=X)
 
         elif estimation_method == 'mcd':
-            cov_matrix = cov_mcd(X=X)  # Placeholder for ledait_shrinkage
+            cov_matrix = cov_mcd(X=X)
+
+        elif estimation_method == 'ewma_ledoit':
+            cov_matrix = cov_ewma_ledoit(X=X, span=span)
+
+        elif estimation_method == 'nls':
+            cov_matrix = cov_nonlinear_shrink(X=X, bandwidth=bandwidth)
 
         else:
             raise ValueError(
@@ -130,6 +141,7 @@ class Covariance:
             return None
         else:
             return cov_matrix
+
 
 
 
@@ -173,6 +185,120 @@ def cov_pearson(X:  Union[pd.DataFrame, np.ndarray]) -> Union[pd.DataFrame, np.n
     else:
         covmat = np.cov(X, rowvar=False)
     return covmat
+
+def cov_ewma_ledoit(
+    X: pd.DataFrame,
+    span: int = 252,
+    impute_strategy: str = 'mean'
+) -> pd.DataFrame:
+    """
+    EWMA‑Kovarianz + Ledoit–Wolf‑Shrinkage.
+
+    Args:
+      X           : DataFrame (Index=time, Columns=assets) of returns.
+      span        : EWMA‑Fensterlänge in Tagen.
+      impute_strategy: 'mean'|'zero' for NaN‑Imputation.
+
+    Returns:
+      shrunk covariance DataFrame.
+    """
+    # 1) Fehlende Werte füllen
+    arr = X.values
+    if impute_strategy == 'mean':
+        col_means = np.nanmean(arr, axis=0)
+        inds = np.where(np.isnan(arr))
+        arr[inds] = np.take(col_means, inds[1])
+    elif impute_strategy == 'zero':
+        arr = np.nan_to_num(arr, 0.0)
+
+    # 2) EWMA‑Gewichte
+    T, p = arr.shape
+    λ = (span - 1) / span
+    # weights: λ^(T-1), …, λ^0
+    w = λ ** np.arange(T-1, -1, -1)
+    w = w / w.sum()
+    # gewichtetes Mittel
+    mean_w = w @ arr
+    A = arr - mean_w  # zentrieren
+    # EWMA‑Kovarianz
+    S_ewma = (A.T * w) @ A
+
+    # 3) Ledoit–Wolf auf S_ewma anwenden
+    # wir ermitteln δ mit sklearn, indem wir X mit sqrt(w)-Gewichten neu skalieren:
+    Xw = A * np.sqrt(w)[:, None]
+    lw = LedoitWolf().fit(Xw)
+    δ = lw.shrinkage_
+    mu = np.trace(S_ewma) / p
+
+    Σ_shrunk = (1 - δ) * S_ewma + δ * mu * np.eye(p)
+
+    # zurück zu DataFrame
+    return pd.DataFrame(Σ_shrunk, index=X.columns, columns=X.columns)
+
+from scipy.stats import gaussian_kde
+
+def cov_nonlinear_shrink(
+    X: pd.DataFrame,
+    bandwidth: float = None,
+    impute_strategy: str = 'mean'
+) -> pd.DataFrame:
+    """
+    Non‑linear shrinkage of the covariance:
+      1) fill NaNs
+      2) sample covariance S
+      3) eigen‑decompose S = V Λ V'
+      4) smooth Λ via a kernel smoother
+      5) rebuild Σ_nl = V Λ_shrunk V'
+
+    Args:
+      X         : DataFrame (T×N) of returns
+      bandwidth : kernel bandwidth (if None, Scott’s rule)
+      impute_strategy: 'mean' or 'zero' for NaN imputation
+
+    Returns:
+      Σ_nl DataFrame (N×N)
+    """
+    # 1) impute
+    arr = X.values.copy()
+    if impute_strategy == 'mean':
+        col_means = np.nanmean(arr, axis=0)
+        inds = np.where(np.isnan(arr))
+        arr[inds] = np.take(col_means, inds[1])
+    else:
+        arr = np.nan_to_num(arr, 0.0)
+
+    # 2) sample covariance
+    # (unbiased: rowvar=False divides by T-1)
+    S = np.cov(arr, rowvar=False)
+
+    # 3) eigen‑decomposition
+    eigvals, eigvecs = np.linalg.eigh(S)
+    # sort descending
+    idx = np.argsort(eigvals)[::-1]
+    eigvals, eigvecs = eigvals[idx], eigvecs[:, idx]
+
+    # 4) kernel‑smooth the eigenvalues
+    # treat eigvals as data, estimate density, then smoothed value = conditional expectation
+    # we use gaussian_kde to get a smooth pdf; then for each λ_i compute weighted average
+    kde = gaussian_kde(eigvals, bw_method=bandwidth)
+    # weights_ij = K(λ_j - λ_i)
+    # for efficiency we can approximate: λ_shrunk_i = ∫ x K(x-λ_i) f̂(x) dx / ∫ K(x-λ_i) f̂(x) dx
+    grid = np.linspace(eigvals.min(), eigvals.max(), 200)
+    pdf_grid = kde(grid)
+    λ_shrunk = np.empty_like(eigvals)
+    for i, λ in enumerate(eigvals):
+        # kernel weights on the grid centered at λ
+        w = np.exp(-0.5 * ((grid - λ) / kde.factor)**2)
+        λ_shrunk[i] = (w * grid * pdf_grid).sum() / (w * pdf_grid).sum()
+
+    # ensure positivity
+    λ_shrunk = np.clip(λ_shrunk, 1e-8, None)
+
+    # 5) reconstruct
+    Σ_nl = (eigvecs * λ_shrunk) @ eigvecs.T
+
+    return pd.DataFrame(Σ_nl, index=X.columns, columns=X.columns)
+
 
 
 def is_pos_def(B):

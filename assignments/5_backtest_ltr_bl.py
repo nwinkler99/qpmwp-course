@@ -50,7 +50,7 @@ from helper_functions import (
     load_pickle,
 )
 
-from helper_5 import Covariance, CovarianceSpecification, MaxSharpe, BlackLittermanMS
+from estimation.covariance import Covariance, CovarianceSpecification
 
 from estimation.expected_return import ExpectedReturn
 from estimation.black_litterman import (
@@ -58,7 +58,7 @@ from estimation.black_litterman import (
     generate_views_from_scores,                     # NEW!
 )
 from optimization.optimization import (
-    BlackLitterman, ScoreVariance, MeanVariance                                # NEW!
+    BlackLitterman, ScoreVariance, MeanVariance , MaxSharpe, BlackLittermanMS                               # NEW!
 )
 from backtesting.backtest_item_builder_classes import (
     SelectionItemBuilder,
@@ -69,14 +69,17 @@ from backtesting.backtest_item_builder_functions import (
     bibfn_selection_min_volume,
     bibfn_selection_gaps,
     bibfn_selection_ltr,
+    bibfn_filter_jkp_factor_scores,
     # Optimization item builder functions
     bibfn_return_series,
     bibfn_cap_weights,                              # NEW!
     bibfn_scores_ltr,
+    bibfn_equal_weights,
     # Constraints item builder functions
     bibfn_budget_constraint,
     bibfn_box_constraints,
-    bibfn_size_dependent_upper_bounds
+    bibfn_size_dependent_upper_bounds,
+    bibfn_sector_exposure_constraints
 )
 from backtesting.backtest_data import BacktestData
 from backtesting.backtest_service import BacktestService
@@ -196,30 +199,16 @@ data.merged_df = merged_df
 
 
 
-
 # --------------------------------------------------------------------------
 # Prepare backtest service
 # --------------------------------------------------------------------------
-def bibfn_equal_weights(bs: 'BacktestService', rebdate: str, **kwargs) -> None:
 
-    # Selection
-    ids = bs.selection.selected
 
-    # Data - market capitalization
-    mcap = bs.data.market_data['mktcap']
+# --------------------------------------------------------------------------
+# Defining new item builder functions
+# --------------------------------------------------------------------------
 
-    # Get last available values for current rebdate
-    mcap = mcap[mcap.index.get_level_values('date') <= rebdate].groupby(
-        level = 'id'
-    ).last()
 
-    # Remove duplicates
-    mcap = mcap[~mcap.index.duplicated(keep=False)].loc[ids]
-    
-    # Attach cap-weights to the optimization data object
-    bs.optimization_data['cap_weights'] = (0*mcap+1)/ len(mcap)
-
-    return None
 
 
 
@@ -239,6 +228,24 @@ selection_item_builders = {
     'ltr': SelectionItemBuilder(
         bibfn = bibfn_selection_ltr,
     ),
+    #'jkp_factor_scores': SelectionItemBuilder(
+    #    bibfn = bibfn_filter_jkp_factor_scores,
+    #    bounds ={ 
+    #'ret_6_1': [0.01, 1.0],   
+    #'rvol_21d': [0.0, 0.95],  
+
+    # more moderate value/quality cushions (quantiles)
+
+    #'be_me':   [0.0, 0.95],  
+    #'f_score': [0.05, 1.0], 
+    # 
+    # 
+    #'qmj': [0.01, 1.0]
+    #   },
+    #),
+
+
+
 }
 
 
@@ -282,13 +289,16 @@ optimization_item_builders = {
         bibfn = bibfn_size_dependent_upper_bounds,
         small_cap = {'threshold': 300_000_000, 'upper': 0.02},
         mid_cap = {'threshold': 1_000_000_000, 'upper': 0.05},
-        large_cap = {'threshold': 10_000_000_000, 'upper': 0.1},
+        large_cap = {'threshold': 10_000_000_000, 'upper': 0.10},
     ),
+    'sector_exposure_constraints': OptimizationItemBuilder(
+        bibfn = bibfn_sector_exposure_constraints)
+
 }
 
-risk_aversion = 10
-turnover_penalty = 0.1
-cov_spec = Covariance(CovarianceSpecification(method='mcd'))
+risk_aversion = 100 
+turnover_penalty = 0.01
+cov_spec = Covariance(CovarianceSpecification(method='mcd', span=252*3))
 solver_name='cvxopt'
 
 
@@ -297,7 +307,7 @@ opt1 = BlackLitterman(
         covariance=cov_spec,
         risk_aversion=risk_aversion,
         tau_psi=0.1,
-        tau_omega=0.001,
+        tau_omega=0.1,
         #view_method='quintile',
         view_method='absolute',
         fields=['scores'],
@@ -332,7 +342,7 @@ opt5 = BlackLittermanMS(
         covariance=cov_spec,
         risk_aversion=risk_aversion,
         tau_psi=0.1,
-        tau_omega=0.001,
+        tau_omega=0.0001,
         #view_method='quintile',
         view_method='absolute',
         fields=['scores'],
@@ -341,25 +351,12 @@ opt5 = BlackLittermanMS(
 # Initialize the backtest service
 bs = BacktestService(
     data = data,
-    optimization=opt5,
+    optimization=opt3,
     selection_item_builders = selection_item_builders,
     optimization_item_builders = optimization_item_builders,
     rebdates = rebdates,
 )
 
-#    optimization = ScoreVariance(
-#        field = 'scores',
-#        covariance = Covariance(method = 'pearson'),
-#        risk_aversion = 10,
-#        solver_name = 'cvxopt',
-#    ),
-
-#    optimization = MeanVariance(
-#        expected_return = ExpectedReturn(method = 'geometric'),
-#        covariance = Covariance(method = 'pearson'),
-#        risk_aversion = 10,
-#        solver_name = 'cvxopt',
-#    ),
 
 
 # --------------------------------------------------------------------------
@@ -379,23 +376,6 @@ bt_bl_ltr.save(
      path = path,  # <change this to your path where you want to store the backtest>
      filename = filename # <change this to your desired filename>
 )
-
-
-
-#Mu = pd.concat({
-#    'mu_prior': bs.optimization.objective.coefficients['mu_implied'],
-#    'mu_posterior': bs.optimization.objective.coefficients['mu_posterior'],
-#}, axis=1) * 252
-
-#Mu.plot(kind='bar', title='Expected Returns', figsize=(10, 6))
-#Mu.iloc[0:10,:].plot(kind='bar', title='Expected Returns', figsize=(10, 6))
-
-
-
-
-
-
-
 
 
 
@@ -454,10 +434,17 @@ sim = pd.concat({
 }, axis = 1).dropna()
 
 
+# Plot cumulative performance
+cumulative_returns = np.log(1 + sim).cumsum()
+cumulative_returns.plot(title='Cumulative Performance', figsize=(10, 6))
 
-np.log((1 + sim)).cumsum().plot(title='Cumulative Performance', figsize = (10, 6))
+# Calculate outperformance (strategy - benchmark)
+outperformance = cumulative_returns.subtract(cumulative_returns['bm'], axis=0)
 
-
+# Plot outperformance
+outperformance.drop(columns=['bm'], errors='ignore').plot(
+    title='Outperformance vs Benchmark', figsize=(10, 6)
+)
 
 
 
