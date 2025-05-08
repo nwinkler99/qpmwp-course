@@ -110,10 +110,17 @@ class Covariance:
         # retrieve span if set, else default
         span = self.spec.get('span', 252)
         bandwidth = self.spec.get('bandwidth', None)
+        clip = self.spec.get('clip', None)
         print(f'Covariance estimation method: {estimation_method}')
+
+        if clip:
+            X = X.clip(lower=clip[0], upper=clip[1])
 
         if estimation_method == 'pearson':
             cov_matrix = cov_pearson(X=X)
+
+        elif estimation_method == 'ledoit':
+            cov_matrix = cov_ledoit(X=X)
 
         elif estimation_method == 'ledoit':
             cov_matrix = cov_ledoit(X=X)
@@ -123,6 +130,13 @@ class Covariance:
 
         elif estimation_method == 'ewma_ledoit':
             cov_matrix = cov_ewma_ledoit(X=X, span=span)
+
+        elif estimation_method == 'ewma_ledoit_mix':
+            span1 = self.spec.get('span1', 0.5*252)
+            span2 = self.spec.get('span2', 3*252)
+            short_weight = self.spec.get('short_weight', 0.5)
+            long_weight = self.spec.get('long_weight', 0.5)
+            cov_matrix = short_weight*cov_ewma_ledoit(X=X, span=span1) + long_weight*cov_ewma_ledoit(X=X, span=span2)
 
         elif estimation_method == 'nls':
             cov_matrix = cov_nonlinear_shrink(X=X, bandwidth=bandwidth)
@@ -210,7 +224,7 @@ def cov_ewma_ledoit(
         arr[inds] = np.take(col_means, inds[1])
     elif impute_strategy == 'zero':
         arr = np.nan_to_num(arr, 0.0)
-
+    
     # 2) EWMA‑Gewichte
     T, p = arr.shape
     λ = (span - 1) / span

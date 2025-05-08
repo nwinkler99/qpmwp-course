@@ -302,7 +302,8 @@ optimization_item_builders = {
 
 risk_aversion = 100
 turnover_penalty = 0.01
-cov_spec = Covariance(CovarianceSpecification(method='ewma_ledoit', span=252*3))
+cov_spec = Covariance(CovarianceSpecification(method='ewma_ledoit_mix', span1=126, span2=3*256,
+                                               short_weight=0.3, long_weight=0.7 , clip = [-0.05, 0.05]))
 solver_name='cvxopt'
 
 
@@ -573,6 +574,13 @@ def capture_ratios(r_p: pd.Series, r_b: pd.Series) -> tuple[float,float]:
     down_cap = avg_p_down / avg_b_down if avg_b_down else np.nan
     return up_cap, down_cap
 
+# Helper function for hit ratio
+def hit_ratio(series, benchmark):
+    """
+    Calculate the hit ratio: percentage of periods where the strategy outperforms the benchmark.
+    """
+    return (series > benchmark).mean()
+
 # Compute individual performance metrics for each simulated strategy
 annual_return_dict        = {}
 cumulative_returns_dict   = {}
@@ -582,6 +590,7 @@ max_drawdown_dict         = {}
 tracking_error_dict       = {}
 downside_te_dict          = {}
 information_ratio_dict    = {}
+hit_ratio_dict            = {}  # New dictionary for hit ratio
 up_capture_dict           = {}
 down_capture_dict         = {}
 
@@ -596,6 +605,7 @@ for column in sim.columns:
     tracking_error_dict[column]     = tracking_error(sim[column], sim['bm'])
     downside_te_dict[column]        = downside_tracking_error(sim[column], sim['bm'])
     information_ratio_dict[column]  = information_ratio(sim[column], sim['bm'])
+    hit_ratio_dict[column]          = hit_ratio(sim[column], sim['bm'])  # Calculate hit ratio
     
     # up/down capture (skip benchmark itself)
     if column != 'bm':
@@ -612,6 +622,7 @@ mdd                = pd.DataFrame(max_drawdown_dict,       index=['Max Drawdown'
 tracking_error     = pd.DataFrame(tracking_error_dict,     index=['Tracking Error'])
 downside_te        = pd.DataFrame(downside_te_dict,        index=['Downside Tracking Error'])
 info_ratio         = pd.DataFrame(information_ratio_dict,  index=['Information Ratio'])
+hit_ratio_df       = pd.DataFrame(hit_ratio_dict,          index=['Hit Ratio'])  # New DataFrame for hit ratio
 up_capture         = pd.DataFrame(up_capture_dict,         index=['Upside Capture'])
 down_capture       = pd.DataFrame(down_capture_dict,       index=['Downside Capture'])
 
@@ -625,10 +636,10 @@ performance_metrics = pd.concat([
     tracking_error,
     downside_te,
     info_ratio,
+    hit_ratio_df,  # Add hit ratio here
     up_capture,
     down_capture
 ])
 
 performance_metrics
-
 

@@ -76,8 +76,7 @@ from backtesting.backtest import Backtest
 # - swiss performance index, SPI (from csv file)
 # --------------------------------------------------------------------------
 
-path_to_data = 'C:/Users/Nils/qpmwp-course/data/'  # <change this to your path to data>
-
+path_to_data = 'C:/Users/nilsw/QPM/qpmwp-course/data/'  # <change this to your path to data>
 # Load market and jkp data from parquet files
 market_data = pd.read_parquet(path = f'{path_to_data}market_data.parquet')
 jkp_data = pd.read_parquet(path = f'{path_to_data}jkp_data.parquet')
@@ -122,6 +121,9 @@ features = features.set_index(['date', 'id'])
 
 train_dates = features.index.get_level_values('date').unique().sort_values()
 train_dates = train_dates[train_dates > market_data_dates[0]]
+
+train_dates = train_dates[::6]
+
 rebdates = train_dates[train_dates >= '2015-01-01'].strftime('%Y-%m-%d').tolist()
 rebdates = rebdates[0:-1]
 rebdates
@@ -321,29 +323,25 @@ optimization_item_builders = {
 # Initialize the backtest service
 bs = BacktestService(
     data = data,
+    optimization = ScoreVariance(
+        field = 'scores',
+        covariance = Covariance(method = 'pearson'),
+        risk_aversion = 1,
+        solver_name = 'cvxopt',
+    ),
     selection_item_builders = selection_item_builders,
-    optimization_item_builders = optimization_item_builders,
+    optimization_item_builders = {
+        **optimization_item_builders,
+        'size_dep_upper_bounds': OptimizationItemBuilder(
+            bibfn = bibfn_size_dependent_upper_bounds,
+            small_cap = {'threshold': 300_000_000, 'upper': 0.02},
+            mid_cap = {'threshold': 1_000_000_000, 'upper': 0.05},
+            large_cap = {'threshold': 10_000_000_000, 'upper': 0.1},
+        ),
+    },
     rebdates = rebdates,
 )
 
-
-
-
-
-
-
-# --------------------------------------------------------------------------
-# Run backtests
-# --------------------------------------------------------------------------
-
-
-# Update the backtest service with a ScoreVariance optimization object
-bs.optimization = ScoreVariance(
-    field = 'scores',
-    covariance = Covariance(method = 'pearson'),
-    risk_aversion = 1,
-    solver_name = 'cvxopt',
-)
 
 # Instantiate the backtest object and run the backtest
 bt_sv = Backtest()
@@ -351,11 +349,14 @@ bt_sv = Backtest()
 # Run the backtest
 bt_sv.run(bs=bs)
 
+
 # # Save the backtest as a .pickle file
-# bt_sv.save(
-#     path = 'C:/Users/User/OneDrive/Documents/QPMwP/Backtests/',  # <change this to your path where you want to store the backtest>
-#     filename = 'backtest_sv_retrain_monthly.pickle' # <change this to your desired filename>
-# )
+path = 'C:/Users/nilsw/QPM/qpmwp-course/BACKTESTS/'
+
+bt_sv.save(
+     path = path,  # <change this to your path where you want to store the backtest>
+     filename = 'backtest_sv.pickle' # <change this to your desired filename>
+      )
 
 
 
@@ -365,186 +366,37 @@ xgb.plot_importance(bs.model_ltr, importance_type='gain', max_num_features=20, t
 
 
 
-
-
-
-
-
-
-# --------------------------------------------------------------------------
-# Run backtest v2: Adding size-dependent upper bounds
-# --------------------------------------------------------------------------
-
-
-# Reinitialize the backtest service with the size-dependent upper bounds
-bs = BacktestService(
-    data = data,
-    optimization = ScoreVariance(
-        field = 'scores',
-        covariance = Covariance(method = 'pearson'),
-        risk_aversion = 1,
-        solver_name = 'cvxopt',
-    ),
-    selection_item_builders = selection_item_builders,
-    optimization_item_builders = {
-        **optimization_item_builders,
-        'size_dep_upper_bounds': OptimizationItemBuilder(
-            bibfn = bibfn_size_dependent_upper_bounds,
-            small_cap = {'threshold': 300_000_000, 'upper': 0.02},
-            mid_cap = {'threshold': 1_000_000_000, 'upper': 0.05},
-            large_cap = {'threshold': 10_000_000_000, 'upper': 0.1},
-        ),
-    },
-    rebdates = rebdates,
-)
-
-# Instantiate the backtest object and run the backtest
-bt_sv_sdub = Backtest()
-
-# Run the backtest
-bt_sv_sdub.run(bs=bs)
-
-# # Save the backtest as a .pickle file
-# bt_sv_sdub.save(
-#     path = 'C:/Users/User/OneDrive/Documents/QPMwP/Backtests/',  # <change this to your path where you want to store the backtest>
-#     filename = 'backtest_sv_sdub.pickle' # <change this to your desired filename>
-# )
-
-
-
-
-
-
-
-
-
-
-# --------------------------------------------------------------------------
-# Run backtest v3: Adding turnover constraint
-# --------------------------------------------------------------------------
-
-
-# Reinitialize the backtest service with the size-dependent upper bounds
-bs = BacktestService(
-    data = data,
-    optimization = ScoreVariance(
-        field = 'scores',
-        covariance = Covariance(method = 'pearson'),
-        risk_aversion = 1,
-        solver_name = 'cvxopt',
-    ),
-    selection_item_builders = selection_item_builders,
-    optimization_item_builders = {
-        **optimization_item_builders,
-        'size_dep_upper_bounds': OptimizationItemBuilder(
-            bibfn = bibfn_size_dependent_upper_bounds,
-            small_cap = {'threshold': 300_000_000, 'upper': 0.02},
-            mid_cap = {'threshold': 1_000_000_000, 'upper': 0.05},
-            large_cap = {'threshold': 10_000_000_000, 'upper': 0.1},
-        ),
-        'turnover_constraint': OptimizationItemBuilder(
-            bibfn = bibfn_turnover_constraint,
-            turnover_limit = 0.25,
-        ),
-    },
-    rebdates = rebdates,
-)
-
-# Instantiate the backtest object and run the backtest
-bt_sv_sdub_tocon = Backtest()
-
-# Run the backtest
-bt_sv_sdub_tocon.run(bs=bs)
-
-# # Save the backtest as a .pickle file
-# bt_sv_sdub_tocon.save(
-#     path = 'C:/Users/User/OneDrive/Documents/QPMwP/Backtests/',  # <change this to your path where you want to store the backtest>
-#     filename = 'backtest_sv_sdub_tocon.pickle' # <change this to your desired filename>
-# )
-
-
-
-
-
-
-
-# --------------------------------------------------------------------------
-# Run backtest v4: Adding turnover constraint, no size-dependent upper bounds
-# --------------------------------------------------------------------------
-
-
-# Reinitialize the backtest service with the size-dependent upper bounds
-bs = BacktestService(
-    data = data,
-    optimization = ScoreVariance(
-        field = 'scores',
-        covariance = Covariance(method = 'pearson'),
-        risk_aversion = 1,
-        solver_name = 'cvxopt',
-    ),
-    selection_item_builders = selection_item_builders,
-    optimization_item_builders = {
-        **optimization_item_builders,
-        'turnover_constraint': OptimizationItemBuilder(
-            bibfn = bibfn_turnover_constraint,
-            turnover_limit = 0.25,
-        ),
-    },
-    rebdates = rebdates,
-)
-
-# Instantiate the backtest object and run the backtest
-bt_sv_tocon = Backtest()
-
-# Run the backtest
-bt_sv_tocon.run(bs=bs)
-
-# # Save the backtest as a .pickle file
-# bt_sv_tocon.save(
-#     path = 'C:/Users/User/OneDrive/Documents/QPMwP/Backtests/',  # <change this to your path where you want to store the backtest>
-#     filename = 'backtest_sv_tocon.pickle' # <change this to your desired filename>
-# )
-
-
-
-
-
-
-
-
-
 # --------------------------------------------------------------------------
 # Simulate strategies
 # --------------------------------------------------------------------------
 
 
 # Laod backtests from pickle
-path = 'C:/Users/User/OneDrive/Documents/QPMwP/Backtests/' #<change this to your local path>
-
+path = 'C:/Users/nilsw/QPM/qpmwp-course/BACKTESTS/'
 bt_sv = load_pickle(
     filename = 'backtest_sv.pickle',
     path = path,
 )
-bt_sv_poc = load_pickle(
-    filename = 'backtest_sv_poc.pickle',
-    path = path,
-)
-bt_sv_retrain_monthly = load_pickle(
-    filename = 'backtest_sv_retrain_monthly.pickle',
-    path = path,
-)
-bt_sv_sdub = load_pickle(
-    filename = 'backtest_sv_sdub.pickle',
-    path = path,
-)
-bt_sv_sdub_tocon = load_pickle(
-    filename = 'backtest_sv_sdub_tocon.pickle',
-    path = path,
-)
-bt_sv_tocon = load_pickle(
-    filename = 'backtest_sv_tocon.pickle',
-    path = path,
-)
+#bt_sv_poc = load_pickle(
+#    filename = 'backtest_sv_poc.pickle',
+#    path = path,
+#)
+#bt_sv_retrain_monthly = load_pickle(
+#    filename = 'backtest_sv_retrain_monthly.pickle',
+#    path = path,
+#)
+#bt_sv_sdub = load_pickle(
+#    filename = 'backtest_sv_sdub.pickle',
+#    path = path,
+#)
+#bt_sv_sdub_tocon = load_pickle(
+#    filename = 'backtest_sv_sdub_tocon.pickle',
+#    path = path,
+#)
+#bt_sv_tocon = load_pickle(
+#    filename = 'backtest_sv_tocon.pickle',
+#    path = path,
+#)
 
 
 
@@ -555,7 +407,7 @@ return_series = bs.data.get_return_series()
 strategy_dict = {
     # 'sv_poc': bt_sv_poc.strategy,
     'sv': bt_sv.strategy,
-    'sv_retrain_monthly': bt_sv_retrain_monthly.strategy,
+    #'sv_retrain_monthly': bt_sv_retrain_monthly.strategy,
     # 'sv_sdub': bt_sv_sdub.strategy,
     # 'sv_sdub_tocon': bt_sv_sdub_tocon.strategy,
     # 'sv_tocon': bt_sv_tocon.strategy,
@@ -603,15 +455,15 @@ np.log((1 + sim)).cumsum().plot(title='Cumulative Performance', figsize = (10, 6
 # --------------------------------------------------------------------------
 
 to_sv = bt_sv.strategy.turnover(return_series=return_series)
-to_sv_tocon = bt_sv_tocon.strategy.turnover(return_series=return_series)
+#to_sv_tocon = bt_sv_tocon.strategy.turnover(return_series=return_series)
 
 to = pd.concat({
     'sv': to_sv,
-    'sv_tocon': to_sv_tocon,
+  #  'sv_tocon': to_sv_tocon,
 }, axis = 1).dropna()
 to.columns = [
     'Score-Variance',
-    'Score-Variance with Turnover Constraint',
+ #   'Score-Variance with Turnover Constraint',
 ]
 
 to.plot(title='Turnover', figsize = (10, 6))
@@ -628,29 +480,58 @@ to
 # Decriptive statistics
 # --------------------------------------------------------------------------
 
-import empyrical as ep
+# --------------------------------------------------------------------------
+# Decriptive statistics
+# --------------------------------------------------------------------------
 
+# Alternative implementation without empyrical
 
-# Compute individual performance metrics for each simulated strategy using empyrical
-annual_return = {}
-cumulative_returns = {}
-annual_volatility = {}
-sharpe_ratio = {}
-max_drawdown = {}
-tracking_error = {}
+# Helper functions for performance metrics
+def annual_return(series, periods_per_year=252):
+    return (1 + series.mean()) ** periods_per_year - 1
+
+def cumulative_returns(series):
+    return (1 + series).prod() - 1
+
+def annual_volatility(series, periods_per_year=252):
+    return series.std() * np.sqrt(periods_per_year)
+
+def sharpe_ratio(series, risk_free_rate=0, periods_per_year=252):
+    excess_return = series - risk_free_rate / periods_per_year
+    return excess_return.mean() / series.std() * np.sqrt(periods_per_year)
+
+def max_drawdown(series):
+    cumulative = (1 + series).cumprod()
+    drawdown = cumulative / cumulative.cummax() - 1
+    return drawdown.min()
+
+def tracking_error(series, benchmark):
+    return (series - benchmark).std() * np.sqrt(252)
+
+# Compute individual performance metrics for each simulated strategy
+annual_return_dict = {}
+cumulative_returns_dict = {}
+annual_volatility_dict = {}
+sharpe_ratio_dict = {}
+max_drawdown_dict = {}
+tracking_error_dict = {}
+
 for column in sim.columns:
     print(f'Performance metrics for {column}')
-    annual_return[column] = ep.annual_return(sim[column])
-    cumulative_returns[column] = ep.cum_returns(sim[column]).tail(1).values[0]
-    annual_volatility[column] = ep.annual_volatility(sim[column])
-    sharpe_ratio[column] = ep.sharpe_ratio(sim[column])
-    max_drawdown[column] = ep.max_drawdown(sim[column])
-    tracking_error[column] = ep.annual_volatility(sim[column] - sim['bm'])
+    annual_return_dict[column] = annual_return(sim[column])
+    cumulative_returns_dict[column] = cumulative_returns(sim[column])
+    annual_volatility_dict[column] = annual_volatility(sim[column])
+    sharpe_ratio_dict[column] = sharpe_ratio(sim[column])
+    max_drawdown_dict[column] = max_drawdown(sim[column])
+    tracking_error_dict[column] = annual_volatility(sim[column] - sim['bm'])
 
+# Combine results into DataFrames
+annual_returns = pd.DataFrame(annual_return_dict, index=['Annual Return'])
+cumret = pd.DataFrame(cumulative_returns_dict, index=['Cumulative Return'])
+annual_volatility = pd.DataFrame(annual_volatility_dict, index=['Annual Volatility'])
+sharpe = pd.DataFrame(sharpe_ratio_dict, index=['Sharpe Ratio'])
+mdd = pd.DataFrame(max_drawdown_dict, index=['Max Drawdown'])
 
-annual_returns = pd.DataFrame(annual_return, index=['Annual Return'])
-cumret = pd.DataFrame(cumulative_returns, index=['Cumulative Return'])
-annual_volatility = pd.DataFrame(annual_volatility, index=['Annual Volatility'])
-sharpe  = pd.DataFrame(sharpe_ratio, index=['Sharpe Ratio'])
-mdd = pd.DataFrame(max_drawdown, index=['Max Drawdown'])
-pd.concat([annual_returns, cumret, annual_volatility, sharpe, mdd])
+# Concatenate all metrics into a single DataFrame
+performance_metrics = pd.concat([annual_returns, cumret, annual_volatility, sharpe, mdd])
+performance_metrics
