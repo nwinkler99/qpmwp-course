@@ -95,7 +95,8 @@ covmat = covariance.estimate(return_series, inplace=False) * 252  # Annualize th
 covmat
 
 # Step 2. Calculate implied expected return from the cap-weights
-mu_implied = covmat @ cap_weights
+risk_aversion = 1
+mu_implied = risk_aversion * covmat @ cap_weights
 mu_implied.plot(kind='bar', figsize=(10, 5))
 
 # Step 3: Assert that analytical solution to the unconstrained mean-variance optimization
@@ -143,16 +144,16 @@ W.corr()
 
 P = pd.DataFrame(
     data=[
-        [],                    # Absolute view on JP
-        [],                    # Relative view on US vs. others
-        [],                    # Relative view on US vs. JP
+        [0, 1, 0, 0, 0],                    # Absolute view on JP
+        [1, -0.25, -0.25, -0.25, -0.25],    # Relative view on US vs. others
+        [1, -1, 0, 0, 0],                   # Relative view on US vs. JP
     ],
     index=['View1', 'View2', 'View3'],
     columns=country_names,
 )
 
 q = pd.Series(
-    data=[],
+    data=[0.04, -0.02, 0.01],
     index=P.index,
 )
 
@@ -168,7 +169,7 @@ q
 # -------------------------
 # Tuning parameters
 tau_psi = 0.05
-tau_omega = 0.05
+tau_omega = 0.001
 # -------------------------
 
 # Uncertainty of the prior

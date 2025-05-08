@@ -174,6 +174,11 @@ class Optimization(ABC):
         GhAb = constraints.to_GhAb()
         lb = constraints.box['lower'].to_numpy() if constraints.box['box_type'] != 'NA' else None
         ub = constraints.box['upper'].to_numpy() if constraints.box['box_type'] != 'NA' else None
+        
+        # Solver settings
+        solver_settings = dict(self.params)
+        if 'solver_name' in solver_settings:
+            solver_settings['solver'] = solver_settings.pop('solver_name')
 
         # Create the optimization model as a QuadraticProgram
         self.model = QuadraticProgram(
@@ -185,7 +190,8 @@ class Optimization(ABC):
             b=GhAb['b'],
             lb=lb,
             ub=ub,
-            solver_settings=self.params)
+            **solver_settings
+        )
 
         # Deal with turnover constraint or penalty (cannot have both)
         turnover_penalty = self.params.get('turnover_penalty')
