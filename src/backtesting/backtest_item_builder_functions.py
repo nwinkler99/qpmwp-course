@@ -518,9 +518,12 @@ def bibfn_budget_constraint(bs: 'BacktestService', rebdate: str, **kwargs) -> No
 
     # Arguments
     budget = kwargs.get('budget', 1)
+    sense = kwargs.get('sense', '=')
+    if sense not in ['=', '<=', '>=']:
+        raise ValueError('Sense must be one of "=", "<=", ">=".')
 
     # Add constraint
-    bs.optimization.constraints.add_budget(rhs = budget, sense = '=')
+    bs.optimization.constraints.add_budget(rhs = budget, sense = sense)
     return None
 
 
@@ -545,6 +548,7 @@ def bibfn_sector_exposure_constraints(
     bs: 'BacktestService',
     rebdate: str,
     limits: dict = None,
+    default_limit: float = 0.2,
     sector_field: str = 'sector', **kwargs
 ) -> None:
     """
@@ -570,7 +574,7 @@ def bibfn_sector_exposure_constraints(
     # Default uniform limit if none provided
     if limits is None:
         # uniform 20% per sector
-        limits = {s: 0.2 for s in sectors}
+        limits = {s: default_limit for s in sectors}
 
     # Build G matrix: one row per sector
     ids = bs.optimization.constraints.ids

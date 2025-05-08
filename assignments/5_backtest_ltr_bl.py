@@ -145,7 +145,7 @@ features = features.set_index(['date', 'id'])
 train_dates = features.index.get_level_values('date').unique().sort_values()
 train_dates = train_dates[train_dates > market_data_dates[0]]
 
-train_dates =train_dates[::6]
+train_dates =train_dates[::3]
 
 rebdates = train_dates[train_dates >= '2015-01-01'].strftime('%Y-%m-%d').tolist()
 rebdates = rebdates[0:-1]
@@ -279,11 +279,13 @@ optimization_item_builders = {
     ),
     'budget_constraint': OptimizationItemBuilder(
         bibfn = bibfn_budget_constraint,
-        budget = 1,
+        budget = 1.2,
+        sense = '<='
     ),
     'box_constraints': OptimizationItemBuilder(
         bibfn = bibfn_box_constraints,
         upper = 0.1,
+        lower= 0,
     ),
     'size_dep_upper_bounds': OptimizationItemBuilder(
         bibfn = bibfn_size_dependent_upper_bounds,
@@ -292,13 +294,15 @@ optimization_item_builders = {
         large_cap = {'threshold': 10_000_000_000, 'upper': 0.10},
     ),
     'sector_exposure_constraints': OptimizationItemBuilder(
-        bibfn = bibfn_sector_exposure_constraints)
+        bibfn = bibfn_sector_exposure_constraints,
+        default_limit = 0.15
+        )
 
 }
 
-risk_aversion = 100 
+risk_aversion = 100
 turnover_penalty = 0.01
-cov_spec = Covariance(CovarianceSpecification(method='mcd', span=252*3))
+cov_spec = Covariance(CovarianceSpecification(method='ewma_ledoit', span=252*3))
 solver_name='cvxopt'
 
 
@@ -427,24 +431,51 @@ sim_dict_net = {
     for key, value in strategy_dict.items()
 }
 
+# Flag: when True, scale the benchmark returns by the Net Exposure, to make the comparison fairer
+# Flag: if True, scale the benchmark returns by Net Exposure
+
+# 1) fetch weights and calculate exposures
+bm_weights_scale = False
+
+# 1) fetch weights and calculate exposures
+wts = bt_bl_ltr.strategy.get_weights_df()
+
+# ensure the index is real datetime, not strings
+wts.index    = pd.to_datetime(wts.index)
+
+net_exposure = wts.sum(axis=1)
+gross_exposure = wts.abs().sum(axis=1)
+net_exposure.name   = "Net Exposure"
+gross_exposure.name = "Gross Exposure"
+
+
+# 2) build sim DataFrame with unscaled bm
 sim = pd.concat({
     'bm': bs.data.bm_series,
-    # **sim_dict_gross,
     **sim_dict_net,
-}, axis = 1).dropna()
+}, axis=1)
+
+# 3) optionally scale bm in-place
+if bm_weights_scale:
+    # align net_exposure to sim’s index, fill any edge NaNs
+    ne = net_exposure.reindex(sim.index).fillna(method='ffill').fillna(method='bfill')
+    for col in sim.columns:
+        sim[col] = sim[col] * ne
 
 
-# Plot cumulative performance
+# 4) drop any remaining NaNs and plot
+sim = sim.dropna()
+#sim = sim.iloc[1:]  
+
+
 cumulative_returns = np.log(1 + sim).cumsum()
 cumulative_returns.plot(title='Cumulative Performance', figsize=(10, 6))
 
-# Calculate outperformance (strategy - benchmark)
 outperformance = cumulative_returns.subtract(cumulative_returns['bm'], axis=0)
-
-# Plot outperformance
 outperformance.drop(columns=['bm'], errors='ignore').plot(
     title='Outperformance vs Benchmark', figsize=(10, 6)
 )
+
 
 
 
@@ -456,21 +487,28 @@ outperformance.drop(columns=['bm'], errors='ignore').plot(
 # Turnover
 # --------------------------------------------------------------------------
 
+# existing turnover & weights
 to_bl_ltr = bt_bl_ltr.strategy.turnover(return_series=return_series)
-#to_sv_retrain_monthly = bt_sv_retrain_monthly.strategy.turnover(return_series=return_series)
+to_bl_ltr.index    = pd.to_datetime(to_bl_ltr.index)
 
-to = pd.concat({
-    'bl_lstr': to_bl_ltr,
- #   'sv_retrain_monthly': to_sv_retrain_monthly,
-}, axis = 1).dropna()
-to.columns = [
-    'Black-Litterman with LTR',
-  #  'Score-Variance, retrain monthly',
-]
+# name turnover
+to_bl_ltr.name = "Turnover"
 
-to.plot(title='Turnover', figsize = (10, 6))
-to.mean() * 12
-to
+# combine into one DataFrame
+df = pd.concat([to_bl_ltr, net_exposure, gross_exposure], axis=1).dropna()
+
+# plot Net & Gross Exposure on primary axis, Turnover on secondary
+ax = df[["Net Exposure","Gross Exposure"]].plot(title="Turnover vs. Net & Gross Exposure", figsize=(10,6))
+ax.set_ylabel("Exposure")
+ax.grid(True)
+
+ax2 = ax.twinx()
+df["Turnover"].plot(ax=ax2, linestyle="--", label="Turnover")
+ax2.set_ylabel("Turnover")
+ax2.legend(loc="upper right")
+
+# show legend for exposures
+ax.legend(loc="upper left")
 
 
 
@@ -503,33 +541,94 @@ def max_drawdown(series):
     drawdown = cumulative / cumulative.cummax() - 1
     return drawdown.min()
 
+
 def tracking_error(series, benchmark):
     return (series - benchmark).std() * np.sqrt(252)
 
+def downside_tracking_error(series, benchmark):
+    active     = series - benchmark
+    neg_active = active[active < 0]
+    return np.sqrt(np.mean(neg_active**2)) * np.sqrt(252)
+
+def information_ratio(series, benchmark):
+    active = series - benchmark
+    # annualized active return / annualized tracking error
+    return (active.mean() * 252) / (active.std() * np.sqrt(252))
+
+
+def capture_ratios(r_p: pd.Series, r_b: pd.Series) -> tuple[float,float]:
+    """
+    Calculate upside and downside capture of portfolio returns r_p vs. benchmark r_b.
+    Returns (upside_capture, downside_capture).
+    """
+    up_ix   = r_b > 0
+    down_ix = r_b < 0
+
+    avg_p_up   = r_p[ up_ix].mean()
+    avg_b_up   = r_b[ up_ix].mean()
+    avg_p_down = r_p[down_ix].mean()
+    avg_b_down = r_b[down_ix].mean()
+
+    up_cap   = avg_p_up   / avg_b_up   if avg_b_up   else np.nan
+    down_cap = avg_p_down / avg_b_down if avg_b_down else np.nan
+    return up_cap, down_cap
+
 # Compute individual performance metrics for each simulated strategy
-annual_return_dict = {}
-cumulative_returns_dict = {}
-annual_volatility_dict = {}
-sharpe_ratio_dict = {}
-max_drawdown_dict = {}
-tracking_error_dict = {}
+annual_return_dict        = {}
+cumulative_returns_dict   = {}
+annual_volatility_dict    = {}
+sharpe_ratio_dict         = {}
+max_drawdown_dict         = {}
+tracking_error_dict       = {}
+downside_te_dict          = {}
+information_ratio_dict    = {}
+up_capture_dict           = {}
+down_capture_dict         = {}
 
 for column in sim.columns:
     print(f'Performance metrics for {column}')
-    annual_return_dict[column] = annual_return(sim[column])
+    # existing metrics
+    annual_return_dict[column]      = annual_return(sim[column])
     cumulative_returns_dict[column] = cumulative_returns(sim[column])
-    annual_volatility_dict[column] = annual_volatility(sim[column])
-    sharpe_ratio_dict[column] = sharpe_ratio(sim[column])
-    max_drawdown_dict[column] = max_drawdown(sim[column])
-    tracking_error_dict[column] = annual_volatility(sim[column] - sim['bm'])
+    annual_volatility_dict[column]  = annual_volatility(sim[column])
+    sharpe_ratio_dict[column]       = sharpe_ratio(sim[column])
+    max_drawdown_dict[column]       = max_drawdown(sim[column])
+    tracking_error_dict[column]     = tracking_error(sim[column], sim['bm'])
+    downside_te_dict[column]        = downside_tracking_error(sim[column], sim['bm'])
+    information_ratio_dict[column]  = information_ratio(sim[column], sim['bm'])
+    
+    # up/down capture (skip benchmark itself)
+    if column != 'bm':
+        up_cap, down_cap = capture_ratios(sim[column], sim['bm'])
+        up_capture_dict[column]   = up_cap
+        down_capture_dict[column] = down_cap
 
 # Combine results into DataFrames
-annual_returns = pd.DataFrame(annual_return_dict, index=['Annual Return'])
-cumret = pd.DataFrame(cumulative_returns_dict, index=['Cumulative Return'])
-annual_volatility = pd.DataFrame(annual_volatility_dict, index=['Annual Volatility'])
-sharpe = pd.DataFrame(sharpe_ratio_dict, index=['Sharpe Ratio'])
-mdd = pd.DataFrame(max_drawdown_dict, index=['Max Drawdown'])
+annual_returns     = pd.DataFrame(annual_return_dict,      index=['Annual Return'])
+cumret             = pd.DataFrame(cumulative_returns_dict, index=['Cumulative Return'])
+annual_volatility  = pd.DataFrame(annual_volatility_dict,  index=['Annual Volatility'])
+sharpe             = pd.DataFrame(sharpe_ratio_dict,       index=['Sharpe Ratio'])
+mdd                = pd.DataFrame(max_drawdown_dict,       index=['Max Drawdown'])
+tracking_error     = pd.DataFrame(tracking_error_dict,     index=['Tracking Error'])
+downside_te        = pd.DataFrame(downside_te_dict,        index=['Downside Tracking Error'])
+info_ratio         = pd.DataFrame(information_ratio_dict,  index=['Information Ratio'])
+up_capture         = pd.DataFrame(up_capture_dict,         index=['Upside Capture'])
+down_capture       = pd.DataFrame(down_capture_dict,       index=['Downside Capture'])
 
 # Concatenate all metrics into a single DataFrame
-performance_metrics = pd.concat([annual_returns, cumret, annual_volatility, sharpe, mdd])
+performance_metrics = pd.concat([
+    annual_returns,
+    cumret,
+    annual_volatility,
+    sharpe,
+    mdd,
+    tracking_error,
+    downside_te,
+    info_ratio,
+    up_capture,
+    down_capture
+])
+
 performance_metrics
+
+
