@@ -97,7 +97,7 @@ from backtesting.backtest import Backtest
 # - swiss performance index, SPI (from csv file)
 # --------------------------------------------------------------------------
 
-path_to_data = 'C:/Users/nilsw/QPM/qpmwp-course/data/'
+path_to_data = "C:/Users/angus/OneDrive/Desktop/QPMwP/Investment_Strategy/data/"
 
 
 # Load market and jkp data from parquet files
@@ -109,9 +109,8 @@ jkp_data = pd.read_parquet(path = f'{path_to_data}jkp_data.parquet')
 data = BacktestData()
 data.market_data = market_data
 data.jkp_data = jkp_data
-data.bm_series = load_data_spi(path='../data/')
-
-
+data.bm_series = load_data_spi(path="C:/Users/angus/OneDrive/Desktop/QPMwP/Investment_Strategy/data/"
+)
 
 
 
@@ -371,7 +370,7 @@ bs = BacktestService(
 bt_bl_ltr = Backtest()
 bt_bl_ltr.run(bs=bs)
     
-path = 'C:/Users/nilsw/QPM/qpmwp-course/BACKTESTS/'  # <change this to your path where you want to store the backtest>
+path = "C:/Users/angus/OneDrive/Desktop/QPMwP/Investment_Strategy/BACKTESTS/"  # <change this to your path where you want to store the backtest>
 filename = 'backtest_bl_ltr.pickle' # <change this to your desired filename>
 
 
@@ -390,7 +389,7 @@ bt_bl_ltr.save(
 # --------------------------------------------------------------------------
 
 
-# Laod backtests from pickle
+# Load backtests from pickle
 #path = 'C:/Users/User/OneDrive/Documents/QPMwP/Backtests/' #<change this to your local path>
 
 
